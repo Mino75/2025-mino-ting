@@ -1,0 +1,16 @@
+{
+  "name": "ting",
+  "version": "1.0.0",
+  "description": " Offline text to voice - node js Microservice",
+  "main": "servers.js",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "author": "Mino Randriamanivo",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "devDependencies": {},
+  "keywords": []
+}
