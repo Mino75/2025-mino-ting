@@ -1,5 +1,5 @@
 const LIVE_CACHE = 'ting-v1';
-const TEMP_CACHE = 'ting-v1';
+const TEMP_CACHE = 'ting-temp-v1';
 const ASSETS = [
   '/',
   '/index.html',
@@ -29,74 +29,67 @@ self.addEventListener('install', event => {
     })
   );
 });
+// Install: Cache all assets in TEMP_CACHE
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(TEMP_CACHE)
+      .then(cache => cache.addAll(ASSETS)) // Use addAll instead of fetching
+      .catch(err => console.error('Install failed:', err))
+  );
+});
 
-// Activate: If staging is complete, replace the live cache.
+// Activate: Move assets from TEMP_CACHE to LIVE_CACHE
 self.addEventListener('activate', event => {
   event.waitUntil(
     (async () => {
-      const tempCache = await caches.open(TEMP_CACHE);
-      const cachedRequests = await tempCache.keys();
-      if (cachedRequests.length === ASSETS.length) {
-        // New version is fully staged. Delete the old live cache.
-        await caches.delete(LIVE_CACHE);
+      try {
+        const tempCache = await caches.open(TEMP_CACHE);
         const liveCache = await caches.open(LIVE_CACHE);
-        // Copy everything from the temporary cache to the live cache.
-        for (const request of cachedRequests) {
-          const response = await tempCache.match(request);
-          await liveCache.put(request, response);
-        }
-        // Delete the temporary cache.
+        const requests = await tempCache.keys();
+
+        // Copy assets from temp to live cache
+        await Promise.all(
+          requests.map(async request => {
+            const response = await tempCache.match(request);
+            if (response) await liveCache.put(request, response);
+          })
+        );
+
         await caches.delete(TEMP_CACHE);
-        // Optionally, notify clients to reload.
-        const clients = await self.clients.matchAll();
-        clients.forEach(client => client.postMessage({ action: 'reload' }));
-      } else {
-        // If staging failed, delete the temporary cache and keep the old live cache.
-        console.error('Staging failed. Keeping the old cache.');
-        await caches.delete(TEMP_CACHE);
+
+        // Remove old cache versions
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames.map(name => {
+            if (name !== LIVE_CACHE) return caches.delete(name);
+          })
+        );
+
+        // Claim clients (skip waiting)
+        await self.clients.claim();
+      } catch (err) {
+        console.error('Activation failed:', err);
       }
-      await self.clients.claim();
     })()
   );
 });
 
+// Fetch: Try network first, fallback to cache
 self.addEventListener('fetch', event => {
-  const requestUrl = new URL(event.request.url);
-  
-  // If the request is not HTTP/HTTPS, bypass caching entirely.
-  if (requestUrl.protocol !== 'http:' && requestUrl.protocol !== 'https:') {
-    event.respondWith(fetch(event.request));
-    return;
-  }
-  
+  if (event.request.method !== 'GET') return; // Ignore non-GET requests
+
   event.respondWith(
     fetch(event.request)
-      .then(networkResponse => {
-        if (networkResponse && networkResponse.ok) {
-          const responseClone = networkResponse.clone();
-          caches.open(LIVE_CACHE).then(cache => {
-            try {
-              // Double-check that the protocol is supported before caching.
-              if (requestUrl.protocol === 'http:' || requestUrl.protocol === 'https:') {
-                cache.put(event.request, responseClone);
-              }
-            } catch (e) {
-              console.error("Cache put error:", e);
-            }
-          });
-        }
-        return networkResponse;
+      .then(response => {
+        // Cache successful network responses
+        const responseClone = response.clone();
+        caches.open(LIVE_CACHE).then(cache => cache.put(event.request, responseClone));
+        return response;
       })
       .catch(() => {
-        return caches.match(event.request).then(cachedResponse => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          return new Response('Network error occurred', {
-            status: 408,
-            statusText: 'Network error'
-          });
-        });
+        // Fallback to cache on failure
+        return caches.open(LIVE_CACHE).then(cache => cache.match(event.request))
+          .then(cachedResponse => cachedResponse || new Response('Offline', { status: 503 }));
       })
   );
 });
